@@ -4,7 +4,7 @@ from datetime import datetime
 
 from whitakers_words.parser import Parser
 
-DB_FILE = "vulgate_latlearn.db"
+DB_FILE = "/data/vulgate_latlearn.db"
 parser = Parser()
 
 
