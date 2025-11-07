@@ -1,0 +1,21 @@
+<<<<<<< HEAD
+{
+  "name": "Latin Vulgate Trainer",
+  "short_name": "Vulgate SRS",
+  "start_url": "client.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": []
+}
+=======
+{
+  "name": "Latin Vulgate Trainer",
+  "short_name": "Vulgate SRS",
+  "start_url": "client.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": []
+}
+>>>>>>> d9509dd (latin vulgate trainer initial)

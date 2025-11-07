@@ -1,0 +1,717 @@
+<<<<<<< HEAD
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Latin Vulgate Trainer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#ffffff">
+
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      max-width: 800px;
+      margin: 20px auto;
+      padding: 0 16px;
+      line-height: 1.5;
+    }
+    h1 {
+      font-size: 22px;
+      margin-bottom: 4px;
+    }
+    #stats {
+      font-size: 12px;
+      color: #444;
+      margin-bottom: 10px;
+      padding: 6px 8px;
+      border: 1px solid #eee;
+      border-radius: 6px;
+    }
+    #settings {
+      font-size: 11px;
+      color: #333;
+      margin-bottom: 14px;
+      padding: 6px 8px;
+      border: 1px solid #eee;
+      border-radius: 6px;
+    }
+    #settings label {
+      margin-right: 10px;
+      white-space: nowrap;
+    }
+    #settings input[type="text"] {
+      width: 220px;
+      font-size: 11px;
+      padding: 3px 4px;
+      box-sizing: border-box;
+    }
+    .card {
+      border: 1px solid #ddd;
+      padding: 14px;
+      margin-bottom: 16px;
+      border-radius: 8px;
+    }
+    .ref {
+      font-size: 12px;
+      color: #555;
+      margin-bottom: 6px;
+    }
+    .latin {
+      font-size: 18px;
+      margin-bottom: 8px;
+    }
+    .target,
+    .hint,
+    .translation {
+      font-size: 14px;
+      color: #333;
+      margin: 3px 0;
+    }
+    .result {
+      font-size: 14px;
+      margin-top: 8px;
+      font-weight: 600;
+    }
+    input.answer-input {
+      width: 100%;
+      padding: 8px;
+      font-size: 16px;
+      margin: 8px 0;
+      box-sizing: border-box;
+    }
+    button {
+      padding: 7px 10px;
+      margin-right: 6px;
+      margin-top: 4px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>Latin Vulgate Trainer</h1>
+
+  <div id="stats">Loading stats…</div>
+
+  <div id="settings">
+    <label>
+      <input type="checkbox" id="defaultMorph">
+      Morphology on by default
+    </label>
+    <label>
+      <input type="checkbox" id="defaultTrans">
+      English sentence on by default
+    </label>
+    <label>
+      API:
+      <input type="text" id="apiBaseInput" placeholder="http://127.0.0.1:8000">
+    </label>
+    <button id="saveSettingsBtn">Save</button>
+  </div>
+
+  <div id="card" class="card hidden">
+    <div id="ref" class="ref"></div>
+    <div id="latin" class="latin"></div>
+    <div id="target" class="target"></div>
+    <div id="hint" class="hint hidden"></div>
+    <div id="translation" class="translation hidden"></div>
+
+    <input id="answer" class="answer-input" type="text" placeholder="Type the missing Latin word">
+
+    <div>
+      <button id="submitBtn">Check</button>
+      <button id="nextBtn" class="hidden">Next</button>
+      <button id="toggleMorphBtn">Toggle morphology</button>
+      <button id="toggleTransBtn">Toggle English sentence</button>
+    </div>
+
+    <div id="result" class="result"></div>
+  </div>
+
+  <div id="empty" class="card hidden">
+    No card available. (No tokens found.)
+  </div>
+
+  <script>
+    // ------- Settings / API base ---------
+
+    function loadSettings() {
+      const storedApi = localStorage.getItem("lv_api_base");
+      const storedMorph = localStorage.getItem("lv_default_morph");
+      const storedTrans = localStorage.getItem("lv_default_trans");
+
+      const apiBase = storedApi || "http://127.0.0.1:8000";
+      const defaultMorph = storedMorph === "1";
+      const defaultTrans = storedTrans === "1";
+
+      document.getElementById("apiBaseInput").value = apiBase;
+      document.getElementById("defaultMorph").checked = defaultMorph;
+      document.getElementById("defaultTrans").checked = defaultTrans;
+
+      return { apiBase, defaultMorph, defaultTrans };
+    }
+
+    function saveSettings() {
+      const apiBase = document.getElementById("apiBaseInput").value.trim() || "http://127.0.0.1:8000";
+      const defaultMorph = document.getElementById("defaultMorph").checked;
+      const defaultTrans = document.getElementById("defaultTrans").checked;
+
+      localStorage.setItem("lv_api_base", apiBase);
+      localStorage.setItem("lv_default_morph", defaultMorph ? "1" : "0");
+      localStorage.setItem("lv_default_trans", defaultTrans ? "1" : "0");
+
+      // Hard reset toggles to new defaults
+      showMorph = defaultMorph;
+      showTranslation = defaultTrans;
+      API_BASE = apiBase;
+
+      // Reload current card and stats under new config
+      loadStats();
+      fetchCard();
+    }
+
+    // ------- Core state ---------
+
+    let { apiBase, defaultMorph, defaultTrans } = loadSettings();
+    let API_BASE = apiBase;
+
+    let currentCard = null;
+    let locked = false;
+    let showMorph = defaultMorph;
+    let showTranslation = defaultTrans;
+
+    // ------- Stats ---------
+
+    async function loadStats() {
+      const statsEl = document.getElementById("stats");
+      try {
+        const res = await fetch(`${API_BASE}/stats`);
+        if (!res.ok) {
+          statsEl.textContent = "Stats unavailable.";
+          return;
+        }
+        const s = await res.json();
+        const acc = s.total_reviews
+          ? ((s.correct_reviews / s.total_reviews) * 100).toFixed(1)
+          : "–";
+        statsEl.textContent =
+          `Lemmas seen: ${s.seen_lemmas}/${s.total_lemmas} ` +
+          `| L1:${s.level_1} L2:${s.level_2} L3:${s.level_3} L4:${s.level_4} L5:${s.level_5} ` +
+          `| Reviews: ${s.total_reviews} (Acc: ${acc}%)`;
+      } catch {
+        statsEl.textContent = "Stats unavailable.";
+      }
+    }
+
+    // ------- Card fetch / render ---------
+
+    async function fetchCard() {
+      locked = false;
+      const resultEl = document.getElementById("result");
+      const answerEl = document.getElementById("answer");
+      const nextBtn = document.getElementById("nextBtn");
+
+      resultEl.textContent = "";
+      answerEl.value = "";
+      nextBtn.classList.add("hidden");
+
+      try {
+        const res = await fetch(`${API_BASE}/next-card`);
+        if (!res.ok) {
+          showEmpty();
+          return;
+        }
+        const card = await res.json();
+        currentCard = card;
+        renderCard(card);
+      } catch {
+        showEmpty();
+      }
+    }
+
+    function showEmpty() {
+      document.getElementById("card").classList.add("hidden");
+      document.getElementById("empty").classList.remove("hidden");
+    }
+
+    function renderCard(card) {
+      const cardEl = document.getElementById("card");
+      const emptyEl = document.getElementById("empty");
+      const refEl = document.getElementById("ref");
+      const latinEl = document.getElementById("latin");
+      const targetEl = document.getElementById("target");
+      const hintEl = document.getElementById("hint");
+      const transEl = document.getElementById("translation");
+
+      emptyEl.classList.add("hidden");
+      cardEl.classList.remove("hidden");
+
+      refEl.textContent = card.reference || "";
+      latinEl.textContent = card.cloze || card.latin_text || "";
+
+      targetEl.textContent = card.english_gloss
+        ? `Target English (missing word): ${card.english_gloss}`
+        : "Target English (missing word): [?]";
+      targetEl.classList.remove("hidden");
+
+      if (card.morph_hint) {
+        hintEl.textContent = `Hint: ${card.morph_hint}`;
+        hintEl.classList.toggle("hidden", !showMorph);
+      } else {
+        hintEl.textContent = "";
+        hintEl.classList.add("hidden");
+      }
+
+      if (card.translation) {
+        transEl.textContent = `EN: ${card.translation}`;
+        transEl.classList.toggle("hidden", !showTranslation);
+      } else {
+        transEl.textContent = "";
+        transEl.classList.add("hidden");
+      }
+    }
+
+    // ------- Answer / SRS ---------
+
+    async function submitAnswer() {
+      if (!currentCard || locked) return;
+      locked = true;
+
+      const ans = document.getElementById("answer").value.trim();
+      const resultEl = document.getElementById("result");
+      const nextBtn = document.getElementById("nextBtn");
+
+      try {
+        const res = await fetch(`${API_BASE}/answer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            card_id: currentCard.card_id,
+            answer: ans,
+            user_id: 1
+          })
+        });
+
+        if (!res.ok) {
+          resultEl.textContent = `Error submitting answer (${res.status}).`;
+          locked = false;
+          return;
+        }
+
+        const data = await res.json();
+        resultEl.textContent = data.correct
+          ? `Correct. Answer: ${data.expected}. Level: ${data.level}, next after card #${data.next_due_card_index}.`
+          : `Wrong. Correct: ${data.expected}. Level: ${data.level}, next after card #${data.next_due_card_index}.`;
+
+        nextBtn.classList.remove("hidden");
+        loadStats();
+      } catch {
+        resultEl.textContent = "Network error (API not reachable).";
+        locked = false;
+      }
+    }
+
+    // ------- Toggles ---------
+
+    function toggleMorph() {
+      showMorph = !showMorph;
+      const hintEl = document.getElementById("hint");
+      if (!currentCard || !currentCard.morph_hint) return;
+      hintEl.classList.toggle("hidden", !showMorph);
+    }
+
+    function toggleTranslation() {
+      showTranslation = !showTranslation;
+      const transEl = document.getElementById("translation");
+      if (!currentCard || !currentCard.translation) return;
+      transEl.classList.toggle("hidden", !showTranslation);
+    }
+
+    // ------- PWA registration ---------
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("service-worker.js").catch(() => {});
+    }
+
+    // ------- Event wiring ---------
+
+    document.getElementById("submitBtn").addEventListener("click", submitAnswer);
+    document.getElementById("nextBtn").addEventListener("click", fetchCard);
+    document.getElementById("toggleMorphBtn").addEventListener("click", toggleMorph);
+    document.getElementById("toggleTransBtn").addEventListener("click", toggleTranslation);
+    document.getElementById("answer").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submitAnswer();
+    });
+    document.getElementById("saveSettingsBtn").addEventListener("click", saveSettings);
+
+    // ------- Initial load ---------
+
+    loadStats();
+    fetchCard();
+  </script>
+</body>
+</html>
+=======
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Latin Vulgate Trainer</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#ffffff">
+
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      max-width: 800px;
+      margin: 20px auto;
+      padding: 0 16px;
+      line-height: 1.5;
+    }
+    h1 {
+      font-size: 22px;
+      margin-bottom: 4px;
+    }
+    #stats {
+      font-size: 12px;
+      color: #444;
+      margin-bottom: 10px;
+      padding: 6px 8px;
+      border: 1px solid #eee;
+      border-radius: 6px;
+    }
+    #settings {
+      font-size: 11px;
+      color: #333;
+      margin-bottom: 14px;
+      padding: 6px 8px;
+      border: 1px solid #eee;
+      border-radius: 6px;
+    }
+    #settings label {
+      margin-right: 10px;
+      white-space: nowrap;
+    }
+    #settings input[type="text"] {
+      width: 220px;
+      font-size: 11px;
+      padding: 3px 4px;
+      box-sizing: border-box;
+    }
+    .card {
+      border: 1px solid #ddd;
+      padding: 14px;
+      margin-bottom: 16px;
+      border-radius: 8px;
+    }
+    .ref {
+      font-size: 12px;
+      color: #555;
+      margin-bottom: 6px;
+    }
+    .latin {
+      font-size: 18px;
+      margin-bottom: 8px;
+    }
+    .target,
+    .hint,
+    .translation {
+      font-size: 14px;
+      color: #333;
+      margin: 3px 0;
+    }
+    .result {
+      font-size: 14px;
+      margin-top: 8px;
+      font-weight: 600;
+    }
+    input.answer-input {
+      width: 100%;
+      padding: 8px;
+      font-size: 16px;
+      margin: 8px 0;
+      box-sizing: border-box;
+    }
+    button {
+      padding: 7px 10px;
+      margin-right: 6px;
+      margin-top: 4px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>Latin Vulgate Trainer</h1>
+
+  <div id="stats">Loading stats…</div>
+
+  <div id="settings">
+    <label>
+      <input type="checkbox" id="defaultMorph">
+      Morphology on by default
+    </label>
+    <label>
+      <input type="checkbox" id="defaultTrans">
+      English sentence on by default
+    </label>
+    <label>
+      API:
+      <input type="text" id="apiBaseInput" placeholder="http://127.0.0.1:8000">
+    </label>
+    <button id="saveSettingsBtn">Save</button>
+  </div>
+
+  <div id="card" class="card hidden">
+    <div id="ref" class="ref"></div>
+    <div id="latin" class="latin"></div>
+    <div id="target" class="target"></div>
+    <div id="hint" class="hint hidden"></div>
+    <div id="translation" class="translation hidden"></div>
+
+    <input id="answer" class="answer-input" type="text" placeholder="Type the missing Latin word">
+
+    <div>
+      <button id="submitBtn">Check</button>
+      <button id="nextBtn" class="hidden">Next</button>
+      <button id="toggleMorphBtn">Toggle morphology</button>
+      <button id="toggleTransBtn">Toggle English sentence</button>
+    </div>
+
+    <div id="result" class="result"></div>
+  </div>
+
+  <div id="empty" class="card hidden">
+    No card available. (No tokens found.)
+  </div>
+
+  <script>
+    // ------- Settings / API base ---------
+
+    function loadSettings() {
+      const storedApi = localStorage.getItem("lv_api_base");
+      const storedMorph = localStorage.getItem("lv_default_morph");
+      const storedTrans = localStorage.getItem("lv_default_trans");
+
+      const apiBase = storedApi || "http://127.0.0.1:8000";
+      const defaultMorph = storedMorph === "1";
+      const defaultTrans = storedTrans === "1";
+
+      document.getElementById("apiBaseInput").value = apiBase;
+      document.getElementById("defaultMorph").checked = defaultMorph;
+      document.getElementById("defaultTrans").checked = defaultTrans;
+
+      return { apiBase, defaultMorph, defaultTrans };
+    }
+
+    function saveSettings() {
+      const apiBase = document.getElementById("apiBaseInput").value.trim() || "http://127.0.0.1:8000";
+      const defaultMorph = document.getElementById("defaultMorph").checked;
+      const defaultTrans = document.getElementById("defaultTrans").checked;
+
+      localStorage.setItem("lv_api_base", apiBase);
+      localStorage.setItem("lv_default_morph", defaultMorph ? "1" : "0");
+      localStorage.setItem("lv_default_trans", defaultTrans ? "1" : "0");
+
+      // Hard reset toggles to new defaults
+      showMorph = defaultMorph;
+      showTranslation = defaultTrans;
+      API_BASE = apiBase;
+
+      // Reload current card and stats under new config
+      loadStats();
+      fetchCard();
+    }
+
+    // ------- Core state ---------
+
+    let { apiBase, defaultMorph, defaultTrans } = loadSettings();
+    let API_BASE = apiBase;
+
+    let currentCard = null;
+    let locked = false;
+    let showMorph = defaultMorph;
+    let showTranslation = defaultTrans;
+
+    // ------- Stats ---------
+
+    async function loadStats() {
+      const statsEl = document.getElementById("stats");
+      try {
+        const res = await fetch(`${API_BASE}/stats`);
+        if (!res.ok) {
+          statsEl.textContent = "Stats unavailable.";
+          return;
+        }
+        const s = await res.json();
+        const acc = s.total_reviews
+          ? ((s.correct_reviews / s.total_reviews) * 100).toFixed(1)
+          : "–";
+        statsEl.textContent =
+          `Lemmas seen: ${s.seen_lemmas}/${s.total_lemmas} ` +
+          `| L1:${s.level_1} L2:${s.level_2} L3:${s.level_3} L4:${s.level_4} L5:${s.level_5} ` +
+          `| Reviews: ${s.total_reviews} (Acc: ${acc}%)`;
+      } catch {
+        statsEl.textContent = "Stats unavailable.";
+      }
+    }
+
+    // ------- Card fetch / render ---------
+
+    async function fetchCard() {
+      locked = false;
+      const resultEl = document.getElementById("result");
+      const answerEl = document.getElementById("answer");
+      const nextBtn = document.getElementById("nextBtn");
+
+      resultEl.textContent = "";
+      answerEl.value = "";
+      nextBtn.classList.add("hidden");
+
+      try {
+        const res = await fetch(`${API_BASE}/next-card`);
+        if (!res.ok) {
+          showEmpty();
+          return;
+        }
+        const card = await res.json();
+        currentCard = card;
+        renderCard(card);
+      } catch {
+        showEmpty();
+      }
+    }
+
+    function showEmpty() {
+      document.getElementById("card").classList.add("hidden");
+      document.getElementById("empty").classList.remove("hidden");
+    }
+
+    function renderCard(card) {
+      const cardEl = document.getElementById("card");
+      const emptyEl = document.getElementById("empty");
+      const refEl = document.getElementById("ref");
+      const latinEl = document.getElementById("latin");
+      const targetEl = document.getElementById("target");
+      const hintEl = document.getElementById("hint");
+      const transEl = document.getElementById("translation");
+
+      emptyEl.classList.add("hidden");
+      cardEl.classList.remove("hidden");
+
+      refEl.textContent = card.reference || "";
+      latinEl.textContent = card.cloze || card.latin_text || "";
+
+      targetEl.textContent = card.english_gloss
+        ? `Target English (missing word): ${card.english_gloss}`
+        : "Target English (missing word): [?]";
+      targetEl.classList.remove("hidden");
+
+      if (card.morph_hint) {
+        hintEl.textContent = `Hint: ${card.morph_hint}`;
+        hintEl.classList.toggle("hidden", !showMorph);
+      } else {
+        hintEl.textContent = "";
+        hintEl.classList.add("hidden");
+      }
+
+      if (card.translation) {
+        transEl.textContent = `EN: ${card.translation}`;
+        transEl.classList.toggle("hidden", !showTranslation);
+      } else {
+        transEl.textContent = "";
+        transEl.classList.add("hidden");
+      }
+    }
+
+    // ------- Answer / SRS ---------
+
+    async function submitAnswer() {
+      if (!currentCard || locked) return;
+      locked = true;
+
+      const ans = document.getElementById("answer").value.trim();
+      const resultEl = document.getElementById("result");
+      const nextBtn = document.getElementById("nextBtn");
+
+      try {
+        const res = await fetch(`${API_BASE}/answer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            card_id: currentCard.card_id,
+            answer: ans,
+            user_id: 1
+          })
+        });
+
+        if (!res.ok) {
+          resultEl.textContent = `Error submitting answer (${res.status}).`;
+          locked = false;
+          return;
+        }
+
+        const data = await res.json();
+        resultEl.textContent = data.correct
+          ? `Correct. Answer: ${data.expected}. Level: ${data.level}, next after card #${data.next_due_card_index}.`
+          : `Wrong. Correct: ${data.expected}. Level: ${data.level}, next after card #${data.next_due_card_index}.`;
+
+        nextBtn.classList.remove("hidden");
+        loadStats();
+      } catch {
+        resultEl.textContent = "Network error (API not reachable).";
+        locked = false;
+      }
+    }
+
+    // ------- Toggles ---------
+
+    function toggleMorph() {
+      showMorph = !showMorph;
+      const hintEl = document.getElementById("hint");
+      if (!currentCard || !currentCard.morph_hint) return;
+      hintEl.classList.toggle("hidden", !showMorph);
+    }
+
+    function toggleTranslation() {
+      showTranslation = !showTranslation;
+      const transEl = document.getElementById("translation");
+      if (!currentCard || !currentCard.translation) return;
+      transEl.classList.toggle("hidden", !showTranslation);
+    }
+
+    // ------- PWA registration ---------
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("service-worker.js").catch(() => {});
+    }
+
+    // ------- Event wiring ---------
+
+    document.getElementById("submitBtn").addEventListener("click", submitAnswer);
+    document.getElementById("nextBtn").addEventListener("click", fetchCard);
+    document.getElementById("toggleMorphBtn").addEventListener("click", toggleMorph);
+    document.getElementById("toggleTransBtn").addEventListener("click", toggleTranslation);
+    document.getElementById("answer").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submitAnswer();
+    });
+    document.getElementById("saveSettingsBtn").addEventListener("click", saveSettings);
+
+    // ------- Initial load ---------
+
+    loadStats();
+    fetchCard();
+  </script>
+</body>
+</html>
+>>>>>>> d9509dd (latin vulgate trainer initial)
